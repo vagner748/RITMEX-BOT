@@ -236,7 +236,7 @@ export class RsiEngine {
   }
 
   private isReady(): boolean {
-    const minKlines = Math.max(30, 14); // Assuming RSI period of 14
+    const minKlines = Math.max(this.config.smaPeriod, this.config.rsiPeriod);
     return Boolean(
       this.accountSnapshot &&
         this.tickerSnapshot &&
@@ -267,8 +267,8 @@ export class RsiEngine {
         return;
       }
       this.logStartupState();
-      const sma30 = getSMA(this.klineSnapshot, 30);
-      const rsi = getRSI(this.klineSnapshot, 14); // Assuming RSI period of 14
+      const sma30 = getSMA(this.klineSnapshot, this.config.smaPeriod);
+      const rsi = getRSI(this.klineSnapshot, this.config.rsiPeriod);
       if (sma30 == null || rsi == null) {
         return;
       }
@@ -350,17 +350,17 @@ export class RsiEngine {
     const now = Date.now();
     const currentMinute = Math.floor(now / 60_000);
 
-    const RSI_OVERSOLD = 25; // Default value
-    const RSI_OVERBOUGHT = 75; // Default value
+    const RSI_OVERSOLD = this.config.rsiOversold;
+    const RSI_OVERBOUGHT = this.config.rsiOverbought;
 
     // Buy if RSI crosses above oversold
     if (currentRsi > RSI_OVERSOLD && this.lastRsi <= RSI_OVERSOLD) {
-      await this.submitMarketOrder("BUY", currentPrice, "RSI cruzou acima de 25, abrindo posição comprada a mercado");
+      await this.submitMarketOrder("BUY", currentPrice, `RSI cruzou acima de ${RSI_OVERSOLD}, abrindo posição comprada a mercado`);
       this.lastEntryMinute = currentMinute;
     } 
     // Sell if RSI crosses below overbought
     else if (currentRsi < RSI_OVERBOUGHT && this.lastRsi >= RSI_OVERBOUGHT) {
-      await this.submitMarketOrder("SELL", currentPrice, "RSI cruzou abaixo de 75, abrindo posição vendida a mercado");
+      await this.submitMarketOrder("SELL", currentPrice, `RSI cruzou abaixo de ${RSI_OVERBOUGHT}, abrindo posição vendida a mercado`);
       this.lastEntryMinute = currentMinute;
     }
   }
@@ -436,12 +436,12 @@ export class RsiEngine {
 
     // Placeholder for RSI exit logic
     // Example: Close position if RSI crosses above 70 (for long) or below 30 (for short)
-    const rsi = getRSI(this.klineSnapshot, 14);
-    const RSI_EXIT_LEVEL = 50; // Default value
+    const rsi = getRSI(this.klineSnapshot, this.config.rsiPeriod);
+    const RSI_EXIT_LEVEL = this.config.rsiExitLevel;
 
     if (rsi != null) {
       if (direction === "long" && rsi < RSI_EXIT_LEVEL) {
-        this.tradeLog.push("close", "RSI abaixo de 50 para posição comprada, fechando a mercado");
+        this.tradeLog.push("close", `RSI abaixo de ${RSI_EXIT_LEVEL} para posição comprada, fechando a mercado`);
         await this.flushOrders();
         await marketClose(
           this.exchange,
@@ -462,7 +462,7 @@ export class RsiEngine {
         );
         return { closed: true, pnl };
       } else if (direction === "short" && rsi > RSI_EXIT_LEVEL) {
-        this.tradeLog.push("close", "RSI acima de 50 para posição vendida, fechando a mercado");
+        this.tradeLog.push("close", `RSI acima de ${RSI_EXIT_LEVEL} para posição vendida, fechando a mercado`);
         await this.flushOrders();
         await marketClose(
           this.exchange,
@@ -533,9 +533,9 @@ export class RsiEngine {
     const rsi = this.lastRsi;
     const trend = price == null || rsi == null
       ? "Sem sinal"
-      : rsi < 30
+      : rsi < this.config.rsiOversold
       ? "Comprado"
-      : rsi > 70
+      : rsi > this.config.rsiOverbought
       ? "Vendido"
       : "Sem sinal";
     const pnl = price != null ? computePositionPnl(position, price, price) : 0;

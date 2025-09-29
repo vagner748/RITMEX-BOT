@@ -21,6 +21,7 @@ export interface CreateOrderParams {
   timeInForce?: TimeInForce;
   reduceOnly?: StringBoolean;
   closePosition?: StringBoolean;
+  newClientOrderId?: string;
 }
 
 export interface AsterAccountPosition {

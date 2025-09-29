@@ -11,6 +11,8 @@ import {
   getPosition,
   getSMA,
   getRSI,
+  calcStopLossPrice,
+  calcTrailingActivationPrice,
   type PositionSnapshot,
 } from "../utils/strategy";
 import { computePositionPnl } from "../utils/pnl";
@@ -31,12 +33,14 @@ import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
+import { makeOrderPlan } from "../core/lib/order-plan";
+import { safeCancelOrder } from "../core/lib/orders";
 
 export interface SmaRsiEngineSnapshot {
   ready: boolean;
   symbol: string;
   lastPrice: number | null;
-  sma20: number | null;
+  sma: number | null;
   rsi: number | null;
   trend: "Comprado" | "Vendido" | "Sem sinal";
   position: PositionSnapshot;
@@ -80,7 +84,7 @@ export class SmaRsiEngine {
   private timer: ReturnType<typeof setInterval> | null = null;
   private processing = false;
   private lastPrice: number | null = null;
-  private lastSma20: number | null = null;
+  private lastSma: number | null = null;
   private lastRsi: number | null = null;
   private totalProfit = 0;
   private totalTrades = 0;
@@ -236,7 +240,7 @@ export class SmaRsiEngine {
   }
 
   private isReady(): boolean {
-    const minKlines = Math.max(20, 14); // Assuming SMA20 and RSI14
+    const minKlines = Math.max(this.config.smaPeriod, this.config.rsiPeriod);
     return Boolean(
       this.accountSnapshot &&
         this.tickerSnapshot &&
@@ -267,9 +271,9 @@ export class SmaRsiEngine {
         return;
       }
       this.logStartupState();
-      const sma20 = getSMA(this.klineSnapshot, 20);
-      const rsi = getRSI(this.klineSnapshot, 14); // Assuming RSI period of 14
-      if (sma20 == null || rsi == null) {
+      const sma = getSMA(this.klineSnapshot, this.config.smaPeriod);
+      const rsi = getRSI(this.klineSnapshot, this.config.rsiPeriod);
+      if (sma == null || rsi == null) {
         return;
       }
       const ticker = this.tickerSnapshot!;
@@ -278,10 +282,10 @@ export class SmaRsiEngine {
 
       if (Math.abs(position.positionAmt) < 1e-5) {
         if (!this.rateLimit.shouldBlockEntries()) {
-          await this.handleOpenPosition(price, sma20, rsi);
+          await this.handleOpenPosition(price, sma, rsi);
         }
       } else {
-        const result = await this.handlePositionManagement(position, price, sma20, rsi);
+        const result = await this.handlePositionManagement(position, price, sma, rsi);
         if (result.closed) {
           this.pendingRealized = { pnl: result.pnl, timestamp: Date.now() };
         }
@@ -289,7 +293,7 @@ export class SmaRsiEngine {
 
       this.sessionVolume.update(position, price);
       this.trackPositionLifecycle(position, price);
-      this.lastSma20 = sma20;
+      this.lastSma = sma;
       this.lastRsi = rsi;
       this.lastPrice = price;
       this.emitUpdate();
@@ -319,7 +323,7 @@ export class SmaRsiEngine {
     if (Math.abs(position.positionAmt) < 1e-5) return;
     const price = this.getReferencePrice() ?? Number(this.tickerSnapshot?.lastPrice) ?? this.lastPrice;
     if (!Number.isFinite(price) || price == null) return;
-    const result = await this.handlePositionManagement(position, Number(price), this.lastSma20, this.lastRsi);
+    const result = await this.handlePositionManagement(position, Number(price), this.lastSma, this.lastRsi);
     if (result.closed) {
       this.pendingRealized = { pnl: result.pnl, timestamp: Date.now() };
     }
@@ -352,8 +356,8 @@ export class SmaRsiEngine {
 
     if (currentSma == null || currentRsi == null || this.lastRsi == null) return;
 
-    const RSI_OVERSOLD = 25; // Default value
-    const RSI_OVERBOUGHT = 75; // Default value
+    const RSI_OVERSOLD = this.config.rsiOversold;
+    const RSI_OVERBOUGHT = this.config.rsiOverbought;
 
     // Regra 1: O SMA Define a Tendência (O Mapa)
     let trendDirection: "BUY" | "SELL" | "NONE" = "NONE";
@@ -369,7 +373,7 @@ export class SmaRsiEngine {
       // O sinal de COMPRA é acionado quando o RSI começa a sair dessa zona, subindo novamente.
       if (currentRsi > RSI_OVERSOLD && this.lastRsi <= RSI_OVERSOLD) {
         // RSI cruzando para cima da zona de sobrevenda
-        await this.submitMarketOrder("BUY", currentPrice, "SMA de alta e RSI cruzando acima de 25, abrindo posição comprada a mercado");
+        await this.submitMarketOrder("BUY", currentPrice, `SMA de alta e RSI cruzando acima de ${RSI_OVERSOLD}, abrindo posição comprada a mercado`);
         this.lastEntryMinute = currentMinute;
       }
     } else if (trendDirection === "SELL") {
@@ -377,7 +381,7 @@ export class SmaRsiEngine {
       // O sinal de VENDA é acionado quando o RSI começa a sair dessa zona, caindo novamente.
       if (currentRsi < RSI_OVERBOUGHT && this.lastRsi >= RSI_OVERBOUGHT) {
         // RSI cruzando para baixo da zona de sobrecompra
-        await this.submitMarketOrder("SELL", currentPrice, "SMA de baixa e RSI cruzando abaixo de 75, abrindo posição vendida a mercado");
+        await this.submitMarketOrder("SELL", currentPrice, `SMA de baixa e RSI cruzando abaixo de ${RSI_OVERBOUGHT}, abrindo posição vendida a mercado`);
         this.lastEntryMinute = currentMinute;
       }
     }
@@ -461,16 +465,16 @@ export class SmaRsiEngine {
 
     if (currentSma == null || currentRsi == null) return { closed: false, pnl };
 
-    const RSI_EXIT_LEVEL = 50; // Default value
+    const RSI_EXIT_LEVEL = this.config.rsiExitLevel;
 
     let shouldClose = false;
 
     // RSI Exit
     if (direction === "long" && currentRsi < RSI_EXIT_LEVEL) {
-      this.tradeLog.push("close", "RSI abaixo de 50 para posição comprada, fechando a mercado");
+      this.tradeLog.push("close", `RSI abaixo de ${RSI_EXIT_LEVEL} para posição comprada, fechando a mercado`);
       shouldClose = true;
     } else if (direction === "short" && currentRsi > RSI_EXIT_LEVEL) {
-      this.tradeLog.push("close", "RSI acima de 50 para posição vendida, fechando a mercado");
+      this.tradeLog.push("close", `RSI acima de ${RSI_EXIT_LEVEL} para posição vendida, fechando a mercado`);
       shouldClose = true;
     }
 
@@ -549,14 +553,14 @@ export class SmaRsiEngine {
   private buildSnapshot(): SmaRsiEngineSnapshot {
     const position = getPosition(this.accountSnapshot, this.config.symbol);
     const price = this.tickerSnapshot ? Number(this.tickerSnapshot.lastPrice) : null;
-    const sma20 = this.lastSma20;
+    const sma = this.lastSma;
     const rsi = this.lastRsi;
     let trend: "Comprado" | "Vendido" | "Sem sinal" = "Sem sinal";
 
-    if (price != null && sma20 != null && rsi != null) {
-      if (price > sma20 && rsi < 25) {
+    if (price != null && sma != null && rsi != null) {
+      if (price > sma && rsi < this.config.rsiOversold) {
         trend = "Comprado";
-      } else if (price < sma20 && rsi > 75) {
+      } else if (price < sma && rsi > this.config.rsiOverbought) {
         trend = "Vendido";
       }
     }
@@ -566,7 +570,7 @@ export class SmaRsiEngine {
       ready: this.isReady(),
       symbol: this.config.symbol,
       lastPrice: price,
-      sma20,
+      sma,
       rsi,
       trend,
       position,

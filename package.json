@@ -13,7 +13,8 @@
     "start:offset:silent": "bun run index.ts --strategy offset-maker --silent",
     "pm2:start:trend": "pm2 start bun --name ritmex-trend --cwd . --restart-delay 5000 -- run index.ts --strategy trend --silent",
     "pm2:start:maker": "pm2 start bun --name ritmex-maker --cwd . --restart-delay 5000 -- run index.ts --strategy maker --silent",
-    "pm2:start:offset": "pm2 start bun --name ritmex-offset --cwd . --restart-delay 5000 -- run index.ts --strategy offset-maker --silent"
+    "pm2:start:offset": "pm2 start bun --name ritmex-offset --cwd . --restart-delay 5000 -- run index.ts --strategy offset-maker --silent",
+    "pm2:start:grid": "pm2 start bun --name ritmex-grid --cwd . --restart-delay 5000 -- run index.ts --strategy grid --silent"
   },
   "devDependencies": {
     "@types/bun": "latest",

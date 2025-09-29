@@ -92,7 +92,7 @@ export function SmaRsiApp({ onExit }: SmaRsiAppProps) {
     );
   }
 
-  const { position, tradeLog, openOrders, trend, ready, lastPrice, sma20, rsi, sessionVolume } = snapshot;
+  const { position, tradeLog, openOrders, trend, ready, lastPrice, sma, rsi, sessionVolume } = snapshot;
   const hasPosition = Math.abs(position.positionAmt) > 1e-5;
   const lastLogs = tradeLog.slice(-5);
   const sortedOrders = [...openOrders].sort((a, b) => (Number(b.updateTime ?? 0) - Number(a.updateTime ?? 0)) || Number(b.orderId) - Number(a.orderId));
@@ -120,7 +120,7 @@ export function SmaRsiApp({ onExit }: SmaRsiAppProps) {
       <Box flexDirection="column" marginBottom={1}>
         <Text color="cyanBright">SMA30 + RSI Strategy Dashboard</Text>
         <Text>
-          Exchange: {exchangeName} ｜ Par: {snapshot.symbol} ｜ Preço Recente: {formatNumber(lastPrice, 2)} ｜ SMA20: {formatNumber(sma20, 2)} ｜ RSI: {formatNumber(rsi, 2)} ｜ Tendência: {trend}
+          Exchange: {exchangeName} ｜ Par: {snapshot.symbol} ｜ Preço Recente: {formatNumber(lastPrice, 2)} ｜ SMA{tradingConfig.smaPeriod}: {formatNumber(sma, 2)} ｜ RSI: {formatNumber(rsi, 2)} ｜ Tendência: {trend}
         </Text>
         <Text color="gray">Status: {ready ? "Executando em tempo real" : READY_MESSAGE} ｜ Pressione Esc para voltar à seleção de estratégia</Text>
       </Box>

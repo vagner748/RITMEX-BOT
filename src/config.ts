@@ -15,12 +15,22 @@ export interface TradingConfig {
   bollingerLength: number;
   bollingerStdMultiplier: number;
   minBollingerBandwidth: number;
+  rsiPeriod: number;
+  rsiOversold: number;
+  rsiOverbought: number;
+  rsiExitLevel: number;
+  smaPeriod: number;
 }
 
 function parseNumber(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const next = Number(value);
   return Number.isFinite(next) ? next : fallback;
+}
+
+function parseBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (!value) return fallback;
+  return value.toLowerCase() === 'true';
 }
 
 export const tradingConfig: TradingConfig = {
@@ -40,6 +50,11 @@ export const tradingConfig: TradingConfig = {
   bollingerLength: parseNumber(process.env.BOLLINGER_LENGTH, 20),
   bollingerStdMultiplier: parseNumber(process.env.BOLLINGER_STD_MULTIPLIER, 2),
   minBollingerBandwidth: parseNumber(process.env.MIN_BOLLINGER_BANDWIDTH, 0.001),
+  rsiPeriod: parseNumber(process.env.RSI_PERIOD, 14),
+  rsiOversold: parseNumber(process.env.RSI_OVERSOLD, 25),
+  rsiOverbought: parseNumber(process.env.RSI_OVERBOUGHT, 75),
+  rsiExitLevel: parseNumber(process.env.RSI_EXIT_LEVEL, 50),
+  smaPeriod: parseNumber(process.env.SMA_PERIOD, 30),
 };
 
 export interface MakerConfig {
@@ -69,4 +84,38 @@ export const makerConfig: MakerConfig = {
     0.05
   ),
   priceTick: parseNumber(process.env.MAKER_PRICE_TICK ?? process.env.PRICE_TICK, 0.1),
+};
+
+export interface GridConfig {
+  enabled: boolean;
+  symbol: string;
+  numOrders: number;
+  spacingPct: number;
+  profitPct: number;
+  stopLossPct: number;
+  maxPositions: number;
+  rebalanceIntervalMs: number;
+  rsiPeriod: number;
+  rsiTimeframe: string;
+  centerCandles: number;
+  orderSize: number;
+  minSpreadPct: number;
+  lossLimit: number;
+}
+
+export const gridConfig: GridConfig = {
+  enabled: parseBoolean(process.env.GRID_ENABLED, true),
+  symbol: process.env.TRADE_SYMBOL ?? "BTCUSDT",
+  numOrders: parseNumber(process.env.GRID_NUM_ORDERS, 10),
+  spacingPct: parseNumber(process.env.GRID_SPACING_PCT, 0.3),
+  profitPct: parseNumber(process.env.GRID_PROFIT_PCT, 0.4),
+  stopLossPct: parseNumber(process.env.GRID_STOP_LOSS, 1.0),
+  maxPositions: parseNumber(process.env.GRID_MAX_POSITIONS, 3),
+  rebalanceIntervalMs: parseNumber(process.env.GRID_REBALANCE_INTERVAL, 300000),
+  rsiPeriod: parseNumber(process.env.GRID_RSI_PERIOD, 14),
+  rsiTimeframe: process.env.GRID_RSI_TIMEFRAME ?? '15m',
+  centerCandles: parseNumber(process.env.GRID_CENTER_CANDLES, 100),
+  orderSize: parseNumber(process.env.GRID_ORDER_SIZE, 0.005),
+  minSpreadPct: parseNumber(process.env.GRID_MIN_SPREAD, 0.1),
+  lossLimit: parseNumber(process.env.LOSS_LIMIT, 0.03),
 };

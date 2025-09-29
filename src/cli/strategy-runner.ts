@@ -1,10 +1,11 @@
-import { makerConfig, tradingConfig } from "../config";
+import { gridConfig, makerConfig, tradingConfig } from "../config";
 import {
   createExchangeAdapter,
   getExchangeDisplayName,
   resolveExchangeId,
 } from "../exchanges/create-adapter";
 import type { ExchangeAdapter } from "../exchanges/adapter";
+import { GridEngine, type GridEngineSnapshot } from "../core/grid-engine";
 import {
   MakerEngine,
   type MakerEngineSnapshot,
@@ -24,6 +25,7 @@ export const STRATEGY_LABELS: Record<StrategyId, string> = {
   trend: "Trend Following",
   maker: "Maker",
   "offset-maker": "Offset Maker",
+  grid: "Grid Trading",
 };
 
 export async function startStrategy(strategyId: StrategyId, options: RunnerOptions = {}): Promise<void> {
@@ -74,6 +76,19 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
       offUpdate: (emitter) => engine.off("update", emitter),
     });
   },
+  grid: async (opts) => {
+    const config = gridConfig;
+    const adapter = createAdapterOrThrow(config.symbol);
+    const engine = new GridEngine(adapter);
+    await runEngine({
+      engine,
+      strategy: "grid",
+      silent: opts.silent,
+      getSnapshot: () => engine.getSnapshot(),
+      onUpdate: (emitter) => engine.on("update", emitter),
+      offUpdate: (emitter) => engine.off("update", emitter),
+    });
+  },
 };
 
 interface EngineHarness<TSnapshot> {
@@ -85,7 +100,7 @@ interface EngineHarness<TSnapshot> {
   offUpdate: (handler: (snapshot: TSnapshot) => void) => void;
 }
 
-async function runEngine<TSnapshot extends TrendEngineSnapshot | MakerEngineSnapshot | OffsetMakerEngineSnapshot>(
+async function runEngine<TSnapshot extends TrendEngineSnapshot | MakerEngineSnapshot | OffsetMakerEngineSnapshot | GridEngineSnapshot>(
   harness: EngineHarness<TSnapshot>
 ): Promise<void> {
   const { engine, strategy, silent, getSnapshot, onUpdate, offUpdate } = harness;

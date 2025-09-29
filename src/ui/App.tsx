@@ -5,10 +5,11 @@ import { MakerApp } from "./MakerApp";
 import { OffsetMakerApp } from "./OffsetMakerApp";
 import { RsiApp } from "./RsiApp";
 import { SmaRsiApp } from "./SmaRsiApp";
+import { GridApp } from "./GridApp"; // Import the new GridApp
 import { decryptCopyright, verifyCopyrightIntegrity } from "../utils/copyright";
 
 interface StrategyOption {
-  id: "trend" | "maker" | "offset-maker" | "rsi" | "sma-rsi";
+  id: "trend" | "maker" | "offset-maker" | "rsi" | "sma-rsi" | "grid"; // Add 'grid' to type
   label: string;
   description: string;
   component: React.ComponentType<{ onExit: () => void }>;
@@ -44,6 +45,12 @@ const STRATEGIES: StrategyOption[] = [
     label: "Estratégia SMA30 + RSI",
     description: "Combina Média Móvel Simples (SMA30) e Índice de Força Relativa (RSI) para pontos de entrada e saída",
     component: SmaRsiApp,
+  },
+  {
+    id: "grid",
+    label: "Estratégia de Grid Trading (NOVO)",
+    description: "Cria uma grade de ordens de compra e venda para lucrar com mercados laterais, usando RSI como filtro.",
+    component: GridApp,
   },
 ];
 

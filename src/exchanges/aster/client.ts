@@ -241,10 +241,30 @@ export interface ListenKeyResponse {
 export class AsterRestClient {
   private readonly apiKey: string;
   private readonly apiSecret: string;
+  private timeOffset: number = 0; // To store the time difference with the server
 
   constructor(options: { apiKey?: string; apiSecret?: string } = {}) {
     this.apiKey = requireEnv(options.apiKey ?? process.env.ASTER_API_KEY, "ASTER_API_KEY");
     this.apiSecret = requireEnv(options.apiSecret ?? process.env.ASTER_API_SECRET, "ASTER_API_SECRET");
+  }
+
+  async syncTime(): Promise<void> {
+    try {
+      const start = Date.now();
+      const response = await fetch(`${REST_BASE}/fapi/v1/time`);
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ${text}`);
+      }
+      const data = JSON.parse(text);
+      const serverTime = Number(data.serverTime);
+      const end = Date.now();
+      const latency = (end - start) / 2; // Estimate latency
+      this.timeOffset = serverTime - end + latency;
+      console.log(`[AsterRestClient] Tempo sincronizado. Offset: ${this.timeOffset}ms`);
+    } catch (error) {
+      console.error(`[AsterRestClient] Falha ao sincronizar tempo com o servidor: ${String(error)}`);
+    }
   }
 
   async getAccount(): Promise<AsterAccountSnapshot> {
@@ -329,8 +349,8 @@ export class AsterRestClient {
   }
 
   private async signedRequest<T>({ path, method, params }: { path: string; method: string; params: Record<string, unknown> }): Promise<T> {
-    const timestamp = Date.now();
-    const payload = { ...params, timestamp, recvWindow: 5000 };
+    const timestamp = Math.floor(Date.now() + this.timeOffset);
+    const payload = { ...params, timestamp, recvWindow: 15000 };
     const query = this.serialize(payload);
     const signature = crypto.createHmac("sha256", this.apiSecret).update(query).digest("hex");
     const url = `${REST_BASE}${path}?${query}&signature=${signature}`;
@@ -593,6 +613,7 @@ export class AsterUserStream {
       if (!this.listenKey) return;
       void this.rest.keepAliveListenKey(this.listenKey).catch((error) => {
         console.error("[AsterUserStream] keepAlive error", error);
+        this.listenKey = null; // Invalidate listenKey to force a new one to be fetched
       });
     }, LISTEN_KEY_KEEPALIVE_MS / 2);
   }
@@ -733,6 +754,7 @@ export class AsterGateway {
   private readonly openOrders = new Map<string, AsterOrder>();
   private positionSyncTimer: ReturnType<typeof setInterval> | null = null;
   private positionSyncInFlight = false;
+  private timeSyncTimer: ReturnType<typeof setInterval> | null = null;
 
   private readonly accountEvent = new SimpleEvent<AsterAccountSnapshot>();
   private readonly ordersEvent = new SimpleEvent<AsterOrder[]>();
@@ -776,6 +798,8 @@ export class AsterGateway {
     if (this.initialized) return;
     if (this.initializing) return this.initializing;
     this.initializing = (async () => {
+      await this.rest.syncTime(); // Synchronize time with server
+      this.startTimeSync(); // Start periodic time synchronization
       await this.refreshSnapshots();
       this.initialized = true;
       await this.userStream.start();
@@ -785,6 +809,25 @@ export class AsterGateway {
       throw error;
     });
     return this.initializing;
+  }
+
+  stop(): void {
+    this.stopTimeSync();
+    // ... existing stop logic ...
+  }
+
+  private startTimeSync(): void {
+    if (this.timeSyncTimer) return;
+    this.timeSyncTimer = setInterval(() => {
+      void this.rest.syncTime();
+    }, 5 * 60 * 1000); // Sync every 5 minutes
+  }
+
+  private stopTimeSync(): void {
+    if (this.timeSyncTimer) {
+      clearInterval(this.timeSyncTimer);
+      this.timeSyncTimer = null;
+    }
   }
 
   onAccount(listener: (snapshot: AsterAccountSnapshot) => void): void {
@@ -1017,5 +1060,19 @@ export class AsterGateway {
       }
     }
     this.ordersEvent.emit(Array.from(this.openOrders.values()));
+  }
+
+  private startTimeSync(): void {
+    if (this.timeSyncTimer) return;
+    this.timeSyncTimer = setInterval(() => {
+      void this.rest.syncTime();
+    }, 5 * 60 * 1000); // Sync every 5 minutes
+  }
+
+  private stopTimeSync(): void {
+    if (this.timeSyncTimer) {
+      clearInterval(this.timeSyncTimer);
+      this.timeSyncTimer = null;
+    }
   }
 }

@@ -1,4 +1,4 @@
-export type StrategyId = "trend" | "maker" | "offset-maker";
+export type StrategyId = "trend" | "maker" | "offset-maker" | "grid";
 
 export interface CliOptions {
   strategy?: StrategyId;
@@ -6,7 +6,7 @@ export interface CliOptions {
   help: boolean;
 }
 
-const STRATEGY_VALUES = new Set<StrategyId>(["trend", "maker", "offset-maker"]);
+const STRATEGY_VALUES = new Set<StrategyId>(["trend", "maker", "offset-maker", "grid"]);
 
 export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliOptions {
   const options: CliOptions = { silent: false, help: false };
