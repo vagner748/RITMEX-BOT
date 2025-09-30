@@ -1,6 +1,6 @@
 import { gridConfig } from "../config";
 import type { ExchangeAdapter } from "../exchanges/adapter";
-import type { AsterOrder, OrderSide } from "../exchanges/types";
+import type { AsterKline, AsterOrder, OrderSide } from "../exchanges/types";
 import { calculateGridLevels, GridLevel } from "../utils/grid-helpers";
 import { getOrdersByStrategy, Strategy } from "../core/order-coordinator";
 
@@ -18,14 +18,10 @@ export interface GridManagerSnapshot {
   activeGridOrders: AsterOrder[];
 }
 
-/**
- * Manages the state and logic of the grid trading strategy.
- */
 export class GridManager {
   private readonly adapter: ExchangeAdapter;
   private readonly strategy: Strategy = "grid";
 
-  // State
   public centerPrice: number = 0;
   public gridLevels: GridLevel[] = [];
   public openPositions: OpenPosition[] = [];
@@ -44,17 +40,27 @@ export class GridManager {
     };
   }
 
-  /**
-   * CRITICAL: Initializes the manager by fetching current market state.
-   */
-  async initialize(currentPrice: number): Promise<void> {
+  async initialize(currentPrice: number, klines: AsterKline[]): Promise<void> {
     const allOpenOrders = await this.adapter.getOpenOrders(gridConfig.symbol);
     this.activeGridOrders = getOrdersByStrategy(allOpenOrders, this.strategy);
 
-    // TODO: Recover open positions and map them to grid trades
+    const positions = await this.adapter.getPositions(gridConfig.symbol);
+    for (const pos of positions) {
+      if (Math.abs(parseFloat(pos.positionAmt)) > 0) {
+        const entryPrice = parseFloat(pos.entryPrice);
+        // This is a simplified recovery. A robust implementation would need
+        // to map the position back to the exact grid order that created it.
+        this.openPositions.push({
+          order: { side: parseFloat(pos.positionAmt) > 0 ? 'BUY' : 'SELL', price: pos.entryPrice, origQty: pos.positionAmt } as AsterOrder,
+          stopLossPrice: this.calculateStopLoss(entryPrice, pos.positionAmt),
+          takeProfitPrice: this.calculateTakeProfit(entryPrice, pos.positionAmt),
+          pnl: parseFloat(pos.unrealizedProfit)
+        });
+      }
+    }
 
     if (this.openPositions.length === 0) {
-      await this.recenterGrid(currentPrice);
+      await this.recenterGrid(klines);
     }
   }
 
@@ -62,40 +68,41 @@ export class GridManager {
     this.activeGridOrders = orders;
   }
 
-  /**
-   * Recalculates the center price and the entire grid based on it.
-   */
-  async recenterGrid(currentPrice: number): Promise<void> {
-    // In a real implementation, this would fetch last X candles to calculate the average
-    this.centerPrice = currentPrice;
-    this.gridLevels = calculateGridLevels(this.centerPrice, gridConfig.numOrders, gridConfig.spacingPct);
+  async recenterGrid(klines: AsterKline[]): Promise<void> {
+    if (klines.length < gridConfig.centerCandles) {
+        // Not enough data to calculate center price, use last price as fallback
+        this.centerPrice = klines.length > 0 ? parseFloat(klines[klines.length - 1].close) : this.centerPrice;
+    } else {
+        const recentCandles = klines.slice(-gridConfig.centerCandles);
+        const sum = recentCandles.reduce((acc, k) => acc + parseFloat(k.close), 0);
+        this.centerPrice = sum / recentCandles.length;
+    }
+    
+    this.gridLevels = calculateGridLevels(
+      this.centerPrice, 
+      gridConfig.numOrders, 
+      gridConfig.spacingPct
+    );
   }
 
-  /**
-   * Generates a unique, namespaced clientOrderId.
-   */
   generateOrderId(side: OrderSide, level: number): string {
     return `${this.strategy}_${side}_${level}_${Date.now()}`;
   }
 
-  /**
-   * Determines if the grid should be rebalanced based on price deviation.
-   */
   shouldRebalance(currentPrice: number): boolean {
-    if (this.centerPrice === 0) return true; // Rebalance if not yet centered
+    if (this.centerPrice === 0) return true;
     const deviation = Math.abs(currentPrice - this.centerPrice) / this.centerPrice;
     return deviation > 0.02; // 2% deviation threshold
   }
 
-  /**
-   * The core logic to determine which grid orders should be active.
-   */
   getDesiredOrders(currentPrice: number, rsi: number): Omit<AsterOrder, 'orderId' | 'status'>[] {
-    const desiredOrders: Omit<AsterOrder, 'orderId' | 'status'>[] = [];
+    if (this.openPositions.length >= gridConfig.maxPositions) {
+      return []; // Do not create new orders if position limit is reached
+    }
 
+    const desiredOrders: Omit<AsterOrder, 'orderId' | 'status'>[] = [];
     if (this.gridLevels.length === 0) return [];
 
-    // Condition to avoid operating in low spread
     const buyLevels = this.gridLevels.filter(l => l.side === 'buy').sort((a,b) => b.price - a.price);
     const sellLevels = this.gridLevels.filter(l => l.side === 'sell').sort((a,b) => a.price - b.price);
     
@@ -118,12 +125,75 @@ export class GridManager {
 
     if (canPlaceSell) {
       for (const level of sellLevels) {
-        // Here we would also check if we have a position to sell
-        desiredOrders.push(this.createOrderObjectForLevel(level));
+        const hasLongPosition = this.openPositions.some(p => p.order.side === 'BUY');
+        if (hasLongPosition) {
+          desiredOrders.push(this.createOrderObjectForLevel(level));
+        }
       }
     }
 
     return desiredOrders;
+  }
+
+  async managePositions(
+    currentPrice: number,
+    log: (type: string, detail: string) => void
+  ): Promise<void> {
+    for (let i = this.openPositions.length - 1; i >= 0; i--) {
+      const pos = this.openPositions[i];
+      const isLong = pos.order.side === 'BUY';
+
+      if ((isLong && currentPrice <= pos.stopLossPrice) || (!isLong && currentPrice >= pos.stopLossPrice)) {
+        log('stop', `Stop loss triggered for position ${pos.order.clientOrderId} @ ${currentPrice}`);
+        await this.closePosition(pos, log);
+        this.openPositions.splice(i, 1);
+        continue;
+      }
+
+      if ((isLong && currentPrice >= pos.takeProfitPrice) || (!isLong && currentPrice <= pos.takeProfitPrice)) {
+        log('profit', `Take profit triggered for position ${pos.order.clientOrderId} @ ${currentPrice}`);
+        await this.closePosition(pos, log);
+        this.openPositions.splice(i, 1);
+        continue;
+      }
+
+      const entryPrice = parseFloat(pos.order.price);
+      const qty = parseFloat(pos.order.origQty);
+      pos.pnl = isLong 
+        ? (currentPrice - entryPrice) * qty
+        : (entryPrice - currentPrice) * qty;
+    }
+  }
+
+  private async closePosition(
+    pos: OpenPosition,
+    log: (type: string, detail: string) => void
+  ): Promise<void> {
+    const closeSide = pos.order.side === 'BUY' ? 'SELL' : 'BUY';
+    const qty = parseFloat(pos.order.origQty);
+    
+    log('close', `Closing position ${pos.order.clientOrderId} with market order.`);
+    await this.adapter.createOrder({
+      symbol: gridConfig.symbol,
+      side: closeSide,
+      type: 'MARKET',
+      quantity: qty,
+      reduceOnly: 'true'
+    });
+  }
+
+  private calculateStopLoss(entryPrice: number, positionAmt: string): number {
+    const isLong = parseFloat(positionAmt) > 0;
+    return isLong 
+      ? entryPrice * (1 - gridConfig.stopLossPct / 100)
+      : entryPrice * (1 + gridConfig.stopLossPct / 100);
+  }
+
+  private calculateTakeProfit(entryPrice: number, positionAmt: string): number {
+    const isLong = parseFloat(positionAmt) > 0;
+    return isLong 
+      ? entryPrice * (1 + gridConfig.profitPct / 100)
+      : entryPrice * (1 - gridConfig.profitPct / 100);
   }
 
   private createOrderObjectForLevel(level: GridLevel): Omit<AsterOrder, 'orderId' | 'status'> {

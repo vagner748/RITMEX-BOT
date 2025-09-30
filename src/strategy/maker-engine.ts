@@ -27,6 +27,7 @@ import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
+import type { Strategy } from "../core/order-coordinator";
 
 interface DesiredOrder {
   side: "BUY" | "SELL";
@@ -70,6 +71,7 @@ export class MakerEngine {
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
   private readonly events = new StrategyEventEmitter<MakerEvent, MakerEngineSnapshot>();
   private readonly sessionVolume = new SessionVolumeTracker();
+  private readonly strategy: Strategy = "maker";
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private processing = false;
@@ -201,14 +203,17 @@ export class MakerEngine {
 
   private syncLocksWithOrders(orders: AsterOrder[] | null | undefined): void {
     const list = Array.isArray(orders) ? orders : [];
-    Object.keys(this.pending).forEach((type) => {
-      const pendingId = this.pending[type];
-      if (!pendingId) return;
-      const match = list.find((order) => String(order.orderId) === pendingId);
-      if (!match || (match.status && match.status !== "NEW" && match.status !== "PARTIALLY_FILLED")) {
-        unlockOperating(this.locks, this.timers, this.pending, type);
-      }
-    });
+    const types = ["LIMIT", "MARKET", "STOP_MARKET", "TRAILING_STOP_MARKET"];
+    for (const type of types) {
+        const lockKey = `${this.strategy}_${type}`;
+        const pendingId = this.pending[lockKey];
+        if (!pendingId) continue;
+
+        const match = list.find((order) => String(order.orderId) === pendingId);
+        if (!match || (match.status && match.status !== "NEW" && match.status !== "PARTIALLY_FILLED")) {
+            unlockOperating(this.locks, this.timers, this.pending, this.strategy, type);
+        }
+    }
   }
 
   private isReady(): boolean {
@@ -307,7 +312,7 @@ export class MakerEngine {
     try {
       await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
       this.pendingCancelOrders.clear();
-      unlockOperating(this.locks, this.timers, this.pending, "LIMIT");
+      unlockOperating(this.locks, this.timers, this.pending, this.strategy, "LIMIT");
       this.openOrders = [];
       this.emitUpdate();
       this.tradeLog.push("order", "Limpando ordens históricas na inicialização");
@@ -368,10 +373,12 @@ export class MakerEngine {
           this.locks,
           this.timers,
           this.pending,
+          this.strategy,
           target.side,
           target.price,
           target.amount,
           (type, detail) => this.tradeLog.push(type, detail),
+          `${this.strategy}_${target.side}_${Date.now()}`,
           target.reduceOnly,
           {
             markPrice: getPosition(this.accountSnapshot, this.config.symbol).markPrice,
@@ -418,6 +425,7 @@ export class MakerEngine {
           this.locks,
           this.timers,
           this.pending,
+          this.strategy,
           position.positionAmt > 0 ? "SELL" : "BUY",
           absPosition,
           (type, detail) => this.tradeLog.push(type, detail),

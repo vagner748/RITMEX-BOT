@@ -35,6 +35,7 @@ import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
+import type { Strategy } from "../core/order-coordinator";
 
 export interface TrendEngineSnapshot {
   ready: boolean;
@@ -84,6 +85,7 @@ export class TrendEngine {
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
   private readonly events = new StrategyEventEmitter<TrendEngineEvent, TrendEngineSnapshot>();
   private readonly sessionVolume = new SessionVolumeTracker();
+  private readonly strategy: Strategy = "trend";
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private processing = false;
@@ -436,6 +438,7 @@ export class TrendEngine {
         this.locks,
         this.timers,
         this.pending,
+        this.strategy,
         side,
         this.config.tradeAmount,
         (type, detail) => this.tradeLog.push(type, detail),
@@ -613,7 +616,8 @@ export class TrendEngine {
       await this.tryPlaceTrailingStop(
         stopSide,
         roundDownToTick(activationPrice, this.config.priceTick),
-        Math.abs(position.positionAmt)
+        Math.abs(position.positionAmt),
+        price
       );
     }
 
@@ -670,6 +674,7 @@ export class TrendEngine {
           this.locks,
           this.timers,
           this.pending,
+          this.strategy,
           direction === "long" ? "SELL" : "BUY",
           Math.abs(position.positionAmt),
           (type, detail) => this.tradeLog.push(type, detail),
@@ -717,6 +722,7 @@ export class TrendEngine {
         this.locks,
         this.timers,
         this.pending,
+        this.strategy,
         side,
         stopPrice,
         quantity,
@@ -770,6 +776,7 @@ export class TrendEngine {
         this.locks,
         this.timers,
         this.pending,
+        this.strategy,
         side,
         nextStopPrice,
         quantity,
@@ -801,6 +808,7 @@ export class TrendEngine {
             this.locks,
             this.timers,
             this.pending,
+            this.strategy,
             side,
             existingStopPrice,
             quantity,
@@ -825,9 +833,18 @@ export class TrendEngine {
   private async tryPlaceTrailingStop(
     side: "BUY" | "SELL",
     activationPrice: number,
-    quantity: number
+    quantity: number,
+    lastPrice: number
   ): Promise<void> {
     try {
+      // Guard against invalid activation prices that would trigger immediately
+      if (side === "BUY" && activationPrice <= lastPrice) {
+        return; // Activation price for BUY must be above the current price
+      }
+      if (side === "SELL" && activationPrice >= lastPrice) {
+        return; // Activation price for SELL must be below the current price
+      }
+
       await placeTrailingStopOrder(
         this.exchange,
         this.config.symbol,
@@ -835,6 +852,7 @@ export class TrendEngine {
         this.locks,
         this.timers,
         this.pending,
+        this.strategy,
         side,
         activationPrice,
         quantity,

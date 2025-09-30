@@ -35,6 +35,7 @@ import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
 import { makeOrderPlan } from "../core/lib/order-plan";
 import { safeCancelOrder } from "../core/lib/orders";
+import type { Strategy } from "../core/order-coordinator";
 
 export interface SmaRsiEngineSnapshot {
   ready: boolean;
@@ -80,6 +81,7 @@ export class SmaRsiEngine {
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
   private readonly events = new StrategyEventEmitter<SmaRsiEngineEvent, SmaRsiEngineSnapshot>();
   private readonly sessionVolume = new SessionVolumeTracker();
+  private readonly strategy: Strategy = "sma-rsi";
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private processing = false;
@@ -229,14 +231,17 @@ export class SmaRsiEngine {
 
   private synchronizeLocks(orders: AsterOrder[] | null | undefined): void {
     const list = Array.isArray(orders) ? orders : [];
-    Object.keys(this.pending).forEach((type) => {
-      const pendingId = this.pending[type];
-      if (!pendingId) return;
-      const match = list.find((order) => String(order.orderId) === pendingId);
-      if (!match || (match.status && match.status !== "NEW")) {
-        unlockOperating(this.locks, this.timers, this.pending, type);
-      }
-    });
+    const types = ["LIMIT", "MARKET", "STOP_MARKET", "TRAILING_STOP_MARKET"];
+    for (const type of types) {
+        const lockKey = `${this.strategy}_${type}`;
+        const pendingId = this.pending[lockKey];
+        if (!pendingId) continue;
+
+        const match = list.find((order) => String(order.orderId) === pendingId);
+        if (!match || (match.status && match.status !== "NEW")) {
+            unlockOperating(this.locks, this.timers, this.pending, this.strategy, type);
+        }
+    }
   }
 
   private isReady(): boolean {
@@ -396,6 +401,7 @@ export class SmaRsiEngine {
         this.locks,
         this.timers,
         this.pending,
+        this.strategy,
         side,
         this.config.tradeAmount,
         (type, detail) => this.tradeLog.push(type, detail),
@@ -496,6 +502,7 @@ export class SmaRsiEngine {
         this.locks,
         this.timers,
         this.pending,
+        this.strategy,
         stopSide,
         Math.abs(position.positionAmt),
         (type, detail) => this.tradeLog.push(type, detail),

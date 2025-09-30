@@ -56,8 +56,7 @@ export class GridEngine extends EventEmitter {
       return;
     }
 
-    await this.gridManager.initialize(this.lastPrice);
-
+    // Initial kline fetch
     this.adapter.watchKlines(gridConfig.symbol, gridConfig.rsiTimeframe, (newKlines) => {
       this.klines = newKlines;
       const prices = this.klines.map(k => parseFloat(k.close));
@@ -66,11 +65,18 @@ export class GridEngine extends EventEmitter {
 
     this.adapter.watchTicker(gridConfig.symbol, (ticker) => {
       this.lastPrice = parseFloat(ticker.lastPrice);
-      if (!this.ready) this.ready = true;
+      if (!this.ready) {
+        // Defer initialization until we have some klines
+        if (this.klines.length > 0) {
+          this.gridManager.initialize(this.lastPrice, this.klines).then(() => {
+            this.ready = true;
+            this.log("info", "Grid Trading strategy is now running.");
+          });
+        }
+      }
     });
 
     this.tickTimer = setInterval(() => this.runTick(), 5000); // Run every 5 seconds
-    this.log("info", "Grid Trading strategy is now running.");
   }
 
   public stop(): void {
@@ -94,23 +100,23 @@ export class GridEngine extends EventEmitter {
 
       // 1. Check for rebalancing
       if (this.gridManager.shouldRebalance(this.lastPrice)) {
-        this.log("grid", `Price moved significantly. Rebalancing grid around ${this.lastPrice}...`);
+        this.log("grid", `Price moved significantly. Rebalancing grid...`);
         const openOrders = await this.adapter.getOpenOrders(gridConfig.symbol);
         await cancelOrdersByStrategy(this.adapter, gridConfig.symbol, openOrders, this.strategy, (t, d) => this.log(t, d));
-        await this.gridManager.recenterGrid(this.lastPrice);
+        await this.gridManager.recenterGrid(this.klines);
       }
 
-      // 2. Get desired orders and current active orders
+      // 2. Manage open positions (stop loss, take profit)
+      await this.gridManager.managePositions(this.lastPrice, (t, d) => this.log(t, d));
+
+      // 3. Get desired orders and current active orders
       const desiredOrders = this.gridManager.getDesiredOrders(this.lastPrice, this.rsi);
       const openOrders = await this.adapter.getOpenOrders(gridConfig.symbol);
       const activeGridOrders = getOrdersByStrategy(openOrders, this.strategy);
       this.gridManager.updateActiveOrders(activeGridOrders);
 
-      // 3. Synchronize orders
+      // 4. Synchronize orders
       await this.syncOrders(desiredOrders, activeGridOrders);
-
-      // 4. Manage open positions (stop loss, take profit)
-      // await this.gridManager.managePositions();
 
     } catch (error) {
       this.log("error", error instanceof Error ? error.message : String(error));

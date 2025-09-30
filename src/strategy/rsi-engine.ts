@@ -31,6 +31,7 @@ import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
+import type { Strategy } from "../core/order-coordinator";
 
 export interface RsiEngineSnapshot {
   ready: boolean;
@@ -76,6 +77,7 @@ export class RsiEngine {
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
   private readonly events = new StrategyEventEmitter<RsiEngineEvent, RsiEngineSnapshot>();
   private readonly sessionVolume = new SessionVolumeTracker();
+  private readonly strategy: Strategy = "rsi";
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private processing = false;
@@ -225,14 +227,17 @@ export class RsiEngine {
 
   private synchronizeLocks(orders: AsterOrder[] | null | undefined): void {
     const list = Array.isArray(orders) ? orders : [];
-    Object.keys(this.pending).forEach((type) => {
-      const pendingId = this.pending[type];
-      if (!pendingId) return;
-      const match = list.find((order) => String(order.orderId) === pendingId);
-      if (!match || (match.status && match.status !== "NEW")) {
-        unlockOperating(this.locks, this.timers, this.pending, type);
-      }
-    });
+    const types = ["LIMIT", "MARKET", "STOP_MARKET", "TRAILING_STOP_MARKET"];
+    for (const type of types) {
+        const lockKey = `${this.strategy}_${type}`;
+        const pendingId = this.pending[lockKey];
+        if (!pendingId) continue;
+
+        const match = list.find((order) => String(order.orderId) === pendingId);
+        if (!match || (match.status && match.status !== "NEW")) {
+            unlockOperating(this.locks, this.timers, this.pending, this.strategy, type);
+        }
+    }
   }
 
   private isReady(): boolean {
@@ -374,6 +379,7 @@ export class RsiEngine {
         this.locks,
         this.timers,
         this.pending,
+        this.strategy,
         side,
         this.config.tradeAmount,
         (type, detail) => this.tradeLog.push(type, detail),
@@ -450,6 +456,7 @@ export class RsiEngine {
           this.locks,
           this.timers,
           this.pending,
+          this.strategy,
           "SELL",
           Math.abs(position.positionAmt),
           (type, detail) => this.tradeLog.push(type, detail),
@@ -471,6 +478,7 @@ export class RsiEngine {
           this.locks,
           this.timers,
           this.pending,
+          this.strategy,
           "BUY",
           Math.abs(position.positionAmt),
           (type, detail) => this.tradeLog.push(type, detail),

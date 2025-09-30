@@ -349,6 +349,9 @@ export class AsterRestClient {
   }
 
   private async signedRequest<T>({ path, method, params }: { path: string; method: string; params: Record<string, unknown> }): Promise<T> {
+    if (this.timeOffset === 0) {
+      await this.syncTime(); // Ensure time is synced before the first request
+    }
     const timestamp = Math.floor(Date.now() + this.timeOffset);
     const payload = { ...params, timestamp, recvWindow: 15000 };
     const query = this.serialize(payload);
