@@ -1,97 +1,94 @@
 # ritmex-bot
 
-基于 Bun 的 Aster 永续合约量化终端，内置趋势跟随（SMA30）与做市策略，支持快速恢复、实时行情订阅与日志追踪。
+A Bun-powered trading workstation for Aster perpetual contracts that ships two production-ready agents: an SMA30 trend follower and a dual-sided market maker. The CLI is built with Ink, synchronises risk state from the exchange, and automatically recovers from restarts or disconnects.
 
-* [Aster 30% 手续费优惠注册链接](https://www.asterdex.com/zh-CN/referral/4665f3)
-* [GRVT 手续费优惠注册链接](https://grvt.io/exchange/sign-up?ref=sea)
+## Documentation Map
+- [中文 README](README.md)
+- [Beginner-friendly Quick Start](simple-readme.md)
 
-## 文档索引
-- [English README](README_en.md)
-- [简明上手指南（零基础）](simple-readme.md)
+## Highlights
+- **Live market data & risk sync** via websocket feeds with REST fallbacks, full reconciliation on restart.
+- **Trend engine** featuring SMA30 entries, fixed stop loss, trailing stop, Bollinger bandwidth gate, and profit-lock stepping.
+- **Market-making loop** with adaptive quote chasing, loss caps, and automatic order healing.
+- **Extensible architecture** decoupling exchange adapters, engines, and the Ink CLI for easy venue or strategy additions.
 
-## 项目亮点
-- **实时行情与风控**：Websocket + REST 自动同步账户、挂单与仓位。
-- **趋势策略**：SMA30 穿越入场，内置止损、移动止盈、布林带带宽过滤与步进锁盈。
-- **做市策略**：支持双边追价、风险阈值与订单自愈。
-- **模块化设计**：适配器、策略引擎与 CLI 解耦，方便扩展新交易所或策略。
+## Requirements
+- Bun ≥ 1.2 (`bun`, `bunx` available on PATH)
+- macOS, Linux, or Windows via WSL (native Windows works but WSL is recommended)
+- Node.js is optional unless your environment requires it for tooling
 
-## 环境要求
-- Bun ≥ 1.2（含 `bun`、`bunx` 命令）
-- macOS、Linux 或 Windows (WSL 推荐)
-- Node.js 仅在某些安装路径需要，可选
-
-## 快速启动脚本（macOS / Linux / WSL）
+## One-Line Bootstrap (macOS / Linux / WSL)
 ```bash
 curl -fsSL https://github.com/discountry/ritmex-bot/raw/refs/heads/main/setup.sh | bash
 ```
-脚本会安装 Bun、依赖，收集 Aster API Key/Secret，生成 `.env` 并启动 CLI。运行前请准备好 API 凭证。
+The script installs Bun, project dependencies, collects Aster API credentials, generates `.env`, and launches the CLI. Prepare your API Key/Secret before running.
 
-## 手动安装步骤
-1. **获取代码**
+## Manual Installation
+1. **Clone the repository**
    ```bash
    git clone https://github.com/discountry/ritmex-bot.git
    cd ritmex-bot
    ```
-   不方便使用 Git 时，可在仓库页面下载 ZIP 并手动解压。
-2. **安装 Bun**
-   - macOS / Linux：`curl -fsSL https://bun.sh/install | bash`
-   - Windows PowerShell：`powershell -c "irm bun.sh/install.ps1 | iex"`
-   安装后重新打开终端，确认 `bun -v` 正常输出版本号。
-3. **安装依赖**
+   Alternatively download the ZIP from GitHub and extract it manually.
+2. **Install Bun**
+   - macOS / Linux: `curl -fsSL https://bun.sh/install | bash`
+   - Windows PowerShell: `powershell -c "irm bun.sh/install.ps1 | iex"`
+   Re-open the terminal and confirm `bun -v` prints a version.
+3. **Install dependencies**
    ```bash
    bun install
    ```
-4. **复制环境变量模板并填写**
+4. **Create your environment file**
    ```bash
    cp .env.example .env
    ```
-   按下文说明修改 `.env`，至少需要正确配置 Aster 或 GRVT 的 API。
-5. **运行 CLI**
+   Edit `.env` with your exchange credentials and overrides.
+5. **Launch the CLI**
    ```bash
    bun run index.ts
    ```
-   方向键选择策略，回车启动；`Esc` 返回菜单，`Ctrl+C` 退出。
+   Use the arrow keys to pick a strategy, `Enter` to start, `Esc` to return to the menu, and `Ctrl+C` to exit.
 
-## 环境变量配置指南
-核心变量在 `.env.example` 中给出默认值：
+## Environment Variables
+The most important settings shipped in `.env.example` are summarised below:
 
-| 变量 | 说明 |
+| Variable | Purpose |
 | --- | --- |
-| `ASTER_API_KEY` / `ASTER_API_SECRET` | Aster API 凭证，运行策略必填 |
-| `TRADE_SYMBOL` | 交易对（默认 `BTCUSDT`） |
-| `TRADE_AMOUNT` | 单笔下单数量（标的资产计） |
-| `LOSS_LIMIT` | 单笔最大亏损触发的强平额度（USDT） |
-| `TRAILING_PROFIT` / `TRAILING_CALLBACK_RATE` | 动态止盈触发值（USDT）与回撤百分比 |
-| `PROFIT_LOCK_TRIGGER_USD` / `PROFIT_LOCK_OFFSET_USD` | 浮盈超过阈值后上调止损的触发金额与偏移 |
-| `BOLLINGER_LENGTH` / `BOLLINGER_STD_MULTIPLIER` | 布林带宽度判定的窗口长度与标准差倍数 |
-| `MIN_BOLLINGER_BANDWIDTH` | 仅当带宽 ≥ 此比例时才触发入场信号 |
-| `PRICE_TICK` / `QTY_STEP` | 交易所要求的最小报价与数量精度 |
-| `POLL_INTERVAL_MS` | 趋势策略循环间隔（毫秒） |
-| `MAX_CLOSE_SLIPPAGE_PCT` | 平仓时相对标记价允许的最大偏差 |
-| `MAKER_*` 系列 | 做市策略独有参数（追价阈值、报价偏移、刷新频率等） |
+| `ASTER_API_KEY` / `ASTER_API_SECRET` | Required Aster exchange credentials |
+| `TRADE_SYMBOL` | Contract symbol, defaults to `BTCUSDT` |
+| `TRADE_AMOUNT` | Order size in base asset units |
+| `LOSS_LIMIT` | Max per-trade loss (USDT) before forced close |
+| `TRAILING_PROFIT` / `TRAILING_CALLBACK_RATE` | Trailing stop trigger amount (USDT) and pullback percentage |
+| `PROFIT_LOCK_TRIGGER_USD` / `PROFIT_LOCK_OFFSET_USD` | Move the base stop once unrealised PnL exceeds this trigger |
+| `BOLLINGER_LENGTH` / `BOLLINGER_STD_MULTIPLIER` | Window size and std-dev multiplier for bandwidth filtering |
+| `MIN_BOLLINGER_BANDWIDTH` | Minimum bandwidth ratio required before opening a new position |
+| `PRICE_TICK` / `QTY_STEP` | Exchange precision filters for price and quantity |
+| `POLL_INTERVAL_MS` | Trend engine polling cadence in milliseconds |
+| `MAX_CLOSE_SLIPPAGE_PCT` | Allowed deviation vs mark price when closing |
+| `MAKER_*` | Maker strategy knobs: chase threshold, quote offsets, refresh cadence, etc. |
 
-切换到 GRVT 时，将 `EXCHANGE=grvt` 并补齐 `GRVT_API_KEY`、`GRVT_API_SECRET`、`GRVT_SUB_ACCOUNT_ID` 等变量；详情见 `.env.example`。
+To trade on GRVT, set `EXCHANGE=grvt` and populate `GRVT_API_KEY`, `GRVT_API_SECRET`, `GRVT_SUB_ACCOUNT_ID`, plus any optional overrides documented in `.env.example`.
 
-## 常用命令
+## Common Commands
 ```bash
-bun run index.ts   # 启动 CLI（默认）
-bun run start      # 同上
-bun run dev        # 调试模式，等价于运行 index.ts
-bun x vitest run   # 执行单元测试
+bun run index.ts   # Launch the CLI
+bun run start      # Same as above
+bun run dev        # Development entry point
+bun x vitest run   # Execute the Vitest suite
 ```
 
-## 静默启动与后台运行
-### 直接静默启动
-无需进入 Ink 菜单，可用命令行直接拉起指定策略：
+## Silent & Background Execution
+### Direct silent launch
+Skip the Ink menu and start a strategy straight from the CLI:
 
 ```bash
-bun run index.ts --strategy trend --silent        # 启动趋势策略
-bun run index.ts --strategy maker --silent        # 启动做市策略
-bun run index.ts --strategy offset-maker --silent # 启动偏移做市策略
+bun run index.ts --strategy trend --silent        # Trend engine
+bun run index.ts --strategy maker --silent        # Maker engine
+bun run index.ts --strategy offset-maker --silent # Offset maker engine
 ```
 
-### 项目内置脚本
-`package.json` 提供了便捷脚本：
+### Package scripts
+Convenience aliases are exposed in `package.json`:
 
 ```bash
 bun run start:trend:silent
@@ -99,14 +96,14 @@ bun run start:maker:silent
 bun run start:offset:silent
 ```
 
-### 使用 pm2 守护并自动重启
-将 `pm2` 安装到项目中（示例：`bun add -d pm2`），之后即可在不安装全局 pm2 的情况下运行：
+### Daemonising with pm2
+Install `pm2` locally (e.g. `bun add -d pm2`) and launch without a global install:
 
 ```bash
 bunx pm2 start bun --name ritmex-trend --cwd . --restart-delay 5000 -- run index.ts --strategy trend --silent
 ```
 
-亦可直接调用脚本：
+You can also reuse the bundled scripts:
 
 ```bash
 bun run pm2:start:trend
@@ -114,30 +111,28 @@ bun run pm2:start:maker
 bun run pm2:start:offset
 ```
 
-根据需要调整 `--name`、`--cwd`、`--restart-delay` 等参数，完成后可执行 `pm2 save` 持久化进程列表。
+Adjust `--name`, `--cwd`, or `--restart-delay` to suit your environment and run `pm2 save` if you want the process to auto-start after reboot.
 
-## 测试
-项目使用 Vitest：
+## Testing
+Vitest powers the unit tests:
 ```bash
-bun run test        # 运行全部测试
+bun run test
 bun x vitest --watch
 ```
 
-## 常见问题
+## Troubleshooting
+- You need at least 50–100 USDT of capital before deploying a live strategy.
+- Set leverage on the exchange beforehand (around 50x is recommended); the bot does not change it for you.
+- Keep server/desktop time in sync with real-world time to avoid signature errors.
+- Make sure the exchange account is in one-way position mode.
+- **Env not loading**: ensure `.env` resides in the repository root and variable names are spelled correctly.
+- **Order rejected for precision**: align `PRICE_TICK`, `QTY_STEP`, and `TRADE_SYMBOL` with the exchange filters.
+- **Permission or auth errors**: double-check exchange API scopes.
+More step-by-step guidance is available in [simple-readme.md](simple-readme.md).
 
-- 你需要至少 50-100 USDT 的资金才能运行策略
-- 请在交易所自行设置 50 倍左右的杠杆，本策略不包含杠杆设置
-- 请确保你电脑/服务器的时间是准确的真实世界时间
-- 持仓方式需要保持单向持仓
-- `.env` 未读取：确认文件位于项目根目录且变量名无误。
-- API 拒绝访问：检查交易所后台权限，确保开启合约读写。
-- 精度错误：同步交易对的最小价格与数量步长。
-更多排查步骤可参考 [简明上手指南](simple-readme.md)。
+## Community & Support
+- Telegram: [https://t.me/+4fdo0quY87o4Mjhh](https://t.me/+4fdo0quY87o4Mjhh)
+- Issues and PRs are welcome for bug reports and feature ideas
 
-## 社区与支持
-- Telegram 交流群：[https://t.me/+4fdo0quY87o4Mjhh](https://t.me/+4fdo0quY87o4Mjhh)
-- 反馈或新特性建议请提交 Issue 或 PR
-
-## 风险提示
-量化交易具备风险。建议在仿真或小额账户中验证策略表现，妥善保管 API 密钥，仅开启必要权限。
-# RITMEX-BOT
+## Disclaimer
+Algorithmic trading carries risk. Validate strategies with paper accounts or small capital first, safeguard your API keys, and only grant the minimum required permissions.
